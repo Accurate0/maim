@@ -18,6 +18,32 @@ Print version and exit.
 .BR \-x ", " \-\-xdisplay=\fIhostname:number.screen_number\fR
 Sets the xdisplay to use.
 .TP
+.BR \-e ", " \-\-exec=\fISTRING\fR
+Run command after successful screenshot.
+.br
+Characters preceded by a '%' are interpreted by strftime(2), see man strftime for examples, and a complete list of possible variables.
+.br
+Can also include any of the following variables.
+.br
+.RS 12
+$f - image path/filename
+.RE
+.RS 12
+$s - image size (bytes)
+.RE
+.RS 12
+$w - image width
+.RE
+.RS 12
+$h - image height
+.RE
+.RS 12
+$$ - print a literal '$'
+.RE
+.RS 12
+\\n - print a newline
+.RE
+.TP
 .BR \-f ", " \-\-format=\fISTRING\fR
 Sets the desired output format, by default maim will attempt to determine the desired output format automatically from the output file. If that fails it defaults to a lossless png format. Currently only supports `png` or `jpg`.
 .TP

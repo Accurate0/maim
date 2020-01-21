@@ -1,4 +1,6 @@
 #include <cstdio>
+#include <cstdlib>
+#include <cstring>
 #include <unistd.h>
 #include <iostream>
 #include <slop.hpp>
@@ -6,6 +8,7 @@
 #include <fstream>
 #include <sstream>
 #include <thread>
+#include <sys/stat.h>
 #include <X11/extensions/shape.h>
 
 #include "cxxopts.hpp"
@@ -15,6 +18,7 @@
 class MaimOptions {
 public:
     MaimOptions();
+    std::string exec;
     std::string savepath;
     std::string format;
     Window window;
@@ -26,6 +30,7 @@ public:
     bool hideCursor;
     bool geometryGiven;
     bool quiet;
+    bool execGiven;
     bool windowGiven;
     bool parentGiven;
     bool formatGiven;
@@ -36,6 +41,7 @@ public:
 };
 
 MaimOptions::MaimOptions() {
+    exec = "";
     savepath = "";
     window = None;
     parent = None;
@@ -48,6 +54,7 @@ MaimOptions::MaimOptions() {
     hideCursor = false;
     geometryGiven = false;
     savepathGiven = false;
+    execGiven = false;
     windowGiven = false;
     formatGiven = false;
     captureBackground = false;
@@ -99,7 +106,7 @@ glm::vec4 parseColor( std::string value ) {
             found[3] = 1;
         }
     } catch (std::invalid_argument* const e) {
-       throw e; 
+       throw e;
     } catch ( ... ) {
         throw new std::invalid_argument("Unable to parse value `" + valuecopy + "` as a color. Should be in the format r,g,b or r,g,b,a. Like 1,1,1,1.");
     }
@@ -155,6 +162,11 @@ glm::vec4 parseGeometry( std::string value ) {
 
 MaimOptions* getMaimOptions( cxxopts::Options& options, X11* x11 ) {
     MaimOptions* foo = new MaimOptions();
+
+    foo->execGiven = options.count("exec") > 0;
+    if ( foo->execGiven ) {
+        foo->exec = options["exec"].as<std::string>();
+    }
     foo->parentGiven = options.count("parent") > 0;
     if ( foo->parentGiven ) {
         foo->parent = parseWindow( options["parent"].as<std::string>(), x11 );
@@ -261,6 +273,75 @@ slop::SlopOptions* getSlopOptions( cxxopts::Options& options ) {
     return foo;
 }
 
+/**
+ * Effectively straight from scrot source.
+ * ref: https://github.com/dreamer/scrot/blob/master/src/main.c
+ */
+char* image_printf(XImage *image, MaimOptions *maimOptions)
+{
+    const char *command = maimOptions->exec.c_str();
+    const char *savepath = maimOptions->savepath.c_str();
+    char buf[20];
+    char ret[4096];
+    char strf[4096];
+    time_t t;
+    struct tm *tm;
+
+    ret[0] = 0;
+
+    time(&t);
+    tm = localtime(&t);
+    strftime(strf, sizeof(strf), command, tm);
+
+    for(char *c = (char*)strf; *c != '\0'; c++) {
+        if(*c == '$') {
+            c++;
+            switch(*c) {
+                case 'f':
+                    strcat(ret, savepath);
+                    break;
+                case '$':
+                    strcat(ret, "$");
+                    break;
+                case 'w':
+                    snprintf(buf, sizeof(buf), "%d", image->width);
+                    strcat(ret, buf);
+                    break;
+                case 'h':
+                    snprintf(buf, sizeof(buf), "%d", image->height);
+                    strcat(ret, buf);
+                    break;
+                case 's':
+                    struct stat s;
+                    if( !stat(savepath, &s) ) {
+                        int size = s.st_size;
+                        snprintf(ret, sizeof(buf), "%d", size);
+                        strcat(ret, buf);
+                    } else {
+                        strcat(ret, "[err]");
+                    }
+                    break;
+                default:
+                    strncat(ret, c, 1);
+            }
+
+        } else if(*c == '\\') {
+            c++;
+            switch(*c) {
+                case 'n':
+                    strcat(ret, "\n");
+                    break;
+                default:
+                    strncat(ret, c, 1);
+            }
+        } else {
+            strncat(ret, c, 1);
+        }
+    }
+
+    return strndup(ret, 4096);
+}
+
 const auto HELP_MESSAGE = R"MULTI_STRING(
 maim - make image
 
@@ -281,6 +362,18 @@ OPTIONS
 
        -x, --xdisplay=hostname:number.screen_number
               Sets the xdisplay to use.
+
+       -e, --exec=STRING
+              Run command after successful screenshot.
+              Characters preceded by a '%' are interpreted by strftime(2),
+              see man strftime for examples, and a complete list of possible variables.
+              Can also include any of the following variables.
+                  $f - image path
+                  $s - image size (bytes)
+                  $w - image width
+                  $h - image height
+                  $$ - print a literal '$'
+                  \n - print a newline
 
        -f, --format=STRING
               Sets  the  desired  output format, by default maim will attempt to
@@ -421,17 +514,18 @@ int app( int argc, char** argv ) {
     ("k,nokeyboard", "Disables the ability to cancel selections with the keyboard.")
     ("o,noopengl", "Disables graphics hardware acceleration.")
     ("positional", "Positional parameters", cxxopts::value<std::vector<std::string>>())
+    ("e,exec", "execute command after screenshot is taken", cxxopts::value<std::string>())
     ;
     options.parse_positional("positional");
     options.parse(argc, argv);
-    
+
     // Version checks and help menu don't require X11, and in fact will fail if running
     // in a headless environment.
     if ( options.count( "version" ) > 0 ) {
         std::cout << MAIM_VERSION << "\n";
         return 0;
     }
-    
+
     if ( options.count( "help" ) > 0 ) {
         std::cout << HELP_MESSAGE << std::endl;
         return 0;
@@ -573,13 +667,24 @@ int app( int argc, char** argv ) {
         // Then output it in the desired format.
         convert.writeJPEG(*out, maimOptions->quality );
     }
-    XDestroyImage( image );
+
 
     if ( maimOptions->savepathGiven ) {
         std::ofstream* file = (std::ofstream*)out;
         file->close();
         delete (std::ofstream*)out;
     }
+
+    int ret = 0;
+
+    if( maimOptions->execGiven ) {
+        char *str = image_printf(image, maimOptions);
+        int status = system(str);
+        free((void*)str);
+        ret = WEXITSTATUS(status);
+    }
+
+    XDestroyImage( image );
     delete x11;
     delete maimOptions;
     if ( options.count( "xdisplay" ) > 0 ) {
@@ -590,7 +695,7 @@ int app( int argc, char** argv ) {
     }
     delete slopOptions;
 
-    return 0;
+    return ret;
 }
 
 int main( int argc, char** argv ) {
