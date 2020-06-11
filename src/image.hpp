@@ -21,6 +21,7 @@
 #ifndef N_IMAGE_H_
 #define N_IMAGE_H_
 
+#include <cstring>
 #include <iostream>
 #include <png.h>
 #include <jpeglib.h>
@@ -89,6 +90,7 @@ public:
     ~ARGBImage();
     void writePNG( std::ostream& streamout, int quality );
     void writeJPEG( std::ostream& streamout, int quality );
+    void writeBMP( std::ostream& streamout );
 };
 
 #endif
